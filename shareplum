@@ -1,0 +1,154 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Sep  8 09:30:09 2023
+
+@author: si736338
+"""
+
+from shareplum import Site
+from shareplum import Office365
+from requests_ntlm import HttpNtlmAuth
+from datetime import date, timedelta
+import csv
+import pandas as pd
+import numpy as np
+import urllib3
+import certifi
+import ssl
+import yaml
+import psycopg2
+import datetime
+import re
+
+# Set the SSL certificate bundle path
+ssl._create_default_https_context = ssl._create_unverified_context
+ssl_certifi_bundle = certifi.where()
+
+# Replace these with your SharePoint credentials and site URL
+with open('C:/Users/si736338/Python_Airflow/usr/local/airflow/.secret/Nintex_acq/config.yaml', 'r') as f:
+        config = yaml.safe_load(f)['sharepoint']
+username = config['username']
+password = config['password']
+site_url = config['site_url']
+ 
+ # Connect to the Greenplum database
+conn = psycopg2.connect(
+     host=config['host'],
+     port=config['port'],
+     database=config['database'],
+     user=config['user'],
+     password=config['db_password'],
+ )
+
+# Create a cursor object
+cursor = conn.cursor()
+
+# Execute the first SQL query and fetch the results
+query1 = 'SELECT * FROM stg_swoop_analytics.nintex_column_mapping'
+cursor.execute(query1)
+results1 = cursor.fetchall()
+reference = pd.DataFrame(results1)
+column_names1 = [desc[0] for desc in cursor.description]
+reference.columns = column_names1
+df1 = reference
+
+# Execute the second SQL query and fetch the results
+query2 = 'SELECT * FROM stg_swoop_analytics.ctl_nintex'
+cursor.execute(query2)
+results2 = cursor.fetchall()
+reference2 = pd.DataFrame(results2)
+column_names2 = [desc[0] for desc in cursor.description]
+reference2.columns = column_names2
+df_ctl = reference2
+# Close the cursor and the database connection
+cursor.close()
+conn.close()
+
+
+auth = HttpNtlmAuth(username, password)
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+site = Site(site_url, auth=auth, verify_ssl=False)
+# Replace "ListName" with your actual SharePoint list name
+list_names = config['list_name']
+# Assuming you have already fetched data from SharePoint lists and stored it in a list
+data_from_lists = []
+
+for list_name in list_names:
+    sp_list = site.List(list_name)
+    data = sp_list.GetListItems()
+    data_from_lists.extend(data)
+    
+    # Create a DataFrame from the collected data
+    df2 = pd.DataFrame(data_from_lists)
+    for column_name in df2.columns:
+        new_column_name = column_name.replace(',', '')
+        df2.rename(columns={column_name: new_column_name}, inplace=True)
+
+
+    
+    if list_name in df_ctl["entity"].values:
+        entity_columns = df_ctl.loc[df_ctl["entity"] == list_name]["entity_columns"].values[0]
+        entity_columns = [col.strip() for col in entity_columns.split(',')]
+        # Ensure the "entity" column is also included
+        #entity_columns.append("entity")
+        df2=df2.reindex(columns=entity_columns,fill_value=np.nan)
+        df2 = df2[entity_columns]
+        
+    # Create dictionaries for column and data type mapping
+    column_mapping = {}
+    data_type_mapping = {}
+    
+    # Iterate over the reference DataFrame
+    for index, row in df1.iterrows():
+        entity = row["entity"]  # Assuming "entity" is the column containing list names
+        old_col = row["Source Columns"]
+        new_col = row['Destination Columns']
+        data_type = row['data_type']
+        
+        # Check if the entity matches the current list_name
+        if entity == list_name and old_col in df2.columns:
+            column_mapping[old_col] = new_col
+            data_type_mapping[new_col] = data_type
+    
+    
+    
+    df2.rename(columns = column_mapping, inplace= True)
+    df2= df2.astype(data_type_mapping)
+    df2.replace('.', ' ', inplace=True)    
+    #df = df.applymap(lambda x: x.replace("\n", "").replace("\r", ""))
+    df2.replace(',', ';', inplace=True)
+    # Custom function to strip HTML tags using regex
+    def strip_html_tags(cell_value):
+        if isinstance(cell_value, str):
+            clean = re.compile('<.*?>')
+            return re.sub(clean, '', cell_value)
+        else:
+            return cell_value
+
+# Apply the custom function to all cells in the DataFrame
+    df2 = df2.applymap(strip_html_tags)
+    
+    #Custom function to apply the logic to all cells
+    def process_cell(cell_value):
+        if pd.isna(cell_value):
+            return ""
+        else:
+            return str(cell_value)
+    
+    #Apply the custom function to all cells in the DataFrame
+    df2 = df2.applymap(process_cell)
+    string_columns = df2.select_dtypes(include=['object']).columns
+    df2[string_columns] = df2[string_columns].apply(lambda x: x.str.replace("\n", "").str.replace("\r", "") if x.dtype == 'object' else x)
+    df2['ctl_ins_ts'] =  datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df2["ctl_elt_job_id"] = np.nan
+    df2["ctl_src_cd"] = "nintex"
+    df2["src_filename"] = f"{list_name}_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv"
+    df2['src_line_no'] = df2.index
+
+# Now
+    
+    # Replace "output.csv" with your desired CSV file name
+    csv_filename = f"{list_name}_{datetime.datetime.now().strftime('%Y%m%d')}.csv"
+    df2.to_csv(csv_filename, index=False)
