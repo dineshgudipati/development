@@ -1,9 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Sep  8 09:30:09 2023
 
-@author: si736338
-"""
 
 from shareplum import Site
 from shareplum import Office365
