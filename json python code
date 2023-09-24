@@ -1,0 +1,47 @@
+
+import requests
+import csv
+from requests_ntlm import HttpNtlmAuth
+import json
+import xml.etree.ElementTree as ET
+import urllib3
+import certifi
+from tabulate import tabulate
+import pandas as pd
+import json
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Define the SharePoint site URL and list name
+site_url = "https://nupointuatse.iag.com.au/sites/DIHomeSupplyChain"
+list_name = "Coaching"
+# Initialize variables
+
+endpoint_url = f"{site_url}/_api/web/lists/getbytitle('{list_name}')/items"
+
+
+verify_ssl = False
+# Authentication (you may need to adjust this depending on your SharePoint setup)
+username = "LDSTAT01\\si736338"
+password = "Varsha@143"
+auth = (username, password)
+
+headers = {
+    'Accept': 'application/json;odata=verbose',  # Use the appropriate content type
+}
+
+# Make a GET request to retrieve data in JSON format
+response = requests.get(endpoint_url, auth=HttpNtlmAuth(username, password), headers=headers, verify=verify_ssl)
+
+if response.status_code == 200:
+    json_data = response.json() 
+  
+df = pd.json_normalize(json_data)
+
+# Specify the file path where you want to save the CSV data
+csv_file_path = "output.csv"
+
+# Write the DataFrame to a CSV file
+df.to_csv(csv_file_path, index=False)
+
+print(f"CSV data has been saved to '{csv_file_path}'.")
