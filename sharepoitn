@@ -116,6 +116,14 @@ for list_name in list_names:
     # Create a DataFrame from all the JSON results
     df = pd.json_normalize(all_json_results)
     if list_name in df_ctl["entity"].values:
+        path = df_ctl.loc[df_ctl["entity"] == list_name]["path"].values[0]
+        df['path'] = path
+
+
+
+
+
+    if list_name in df_ctl["entity"].values:
             entity_columns = df_ctl.loc[df_ctl["entity"] == list_name]["entity_columns"].values[0]
             entity_columns = [col.strip() for col in entity_columns.split(',')]
             # Ensure the "entity" column is also included
