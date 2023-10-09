@@ -1,0 +1,225 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Oct  5 09:38:31 2023
+
+@author: si736338
+"""
+
+
+import requests
+import csv
+from requests_ntlm import HttpNtlmAuth
+import json
+import xml.etree.ElementTree as ET
+import urllib3
+import certifi
+from tabulate import tabulate
+import pandas as pd
+import json
+import pytz
+import yaml
+import re
+import psycopg2
+import numpy as np
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Replace these with your SharePoint credentials and site URL
+with open('C:/Users/si736338/Python_Airflow/usr/local/airflow/.secret/Nintex_acq/config.yaml', 'r') as f:
+        config = yaml.safe_load(f)['sharepoint']
+username = config['username']
+password = config['password']
+site_url = config['site_url']
+ 
+ # Connect to the Greenplum database
+conn = psycopg2.connect(
+     host=config['host'],
+     port=config['port'],
+     database=config['database'],
+     user=config['user'],
+     password=config['db_password'],
+ )
+
+
+# Create a cursor object
+cursor = conn.cursor()
+
+# Execute the first SQL query and fetch the results
+query1 = 'SELECT * FROM stg_swoop_analytics.nintex_column_mapping'
+cursor.execute(query1)
+results1 = cursor.fetchall()
+reference = pd.DataFrame(results1)
+column_names1 = [desc[0] for desc in cursor.description]
+reference.columns = column_names1
+df1 = reference
+
+# Execute the second SQL query and fetch the results
+query2 = 'SELECT * FROM stg_swoop_analytics.ctl_nintex'
+cursor.execute(query2)
+results2 = cursor.fetchall()
+reference2 = pd.DataFrame(results2)
+column_names2 = [desc[0] for desc in cursor.description]
+reference2.columns = column_names2
+df_ctl = reference2
+# Close the cursor and the database connection
+cursor.close()
+conn.close()
+
+
+
+# Define the SharePoint site URL and list name
+site_url = config['site_url']
+list_names = ['Mid Repair Audit']
+#list_names = df_ctl['entity']
+# Initialize variables
+
+
+for list_name in list_names:
+    # Initialize variables
+    endpoint_url = f"{site_url}/_api/web/lists/getbytitle('{list_name}')/items"
+
+
+
+    verify_ssl = False
+    # Authentication (you may need to adjust this depending on your SharePoint setup)
+    username = config['username']
+    password = config['password']
+    
+    auth = (username, password)
+    
+    headers = {
+        'Accept': 'application/json;odata=verbose',  # Use the appropriate content type
+    }
+    
+    # Make a GET request to retrieve data in JSON format
+    all_json_results = []
+    
+    while True:
+        # Make a GET request to retrieve data in JSON format
+        response = requests.get(endpoint_url, auth=HttpNtlmAuth(username, password), headers=headers, verify=verify_ssl)
+    
+        if response.status_code == 200:
+            json_data = response.json()
+            json_results = json_data.get('d', {}).get('results', [])
+    
+            # Extend the list with the current page's results
+            all_json_results.extend(json_results)
+    
+            # # Check if there is a next page URL
+            next_page_url = json_data.get('d', {}).get('__next', [])
+    
+            if next_page_url:
+                endpoint_url = next_page_url
+            else:
+                break  # No more pages to fetch
+    
+    # Create a DataFrame from all the JSON results
+    df = pd.json_normalize(all_json_results)
+    if list_name in df_ctl["entity"].values:
+            entity_columns = df_ctl.loc[df_ctl["entity"] == list_name]["entity_columns"].values[0]
+            entity_columns = [col.strip() for col in entity_columns.split(',')]
+            # Ensure the "entity" column is also included
+            #entity_columns.append("entity")
+            df=df.reindex(columns=entity_columns).fillna('')
+            df = df[entity_columns]
+    
+    
+    
+    if list_name in reference["entity"].values:
+        # Filter 'df_ctl' to get the mapping for the specified entity
+        mapping = reference[reference["entity"] == list_name][["Source Columns", "Destination Columns"]]
+        #mapping_datatype = reference[reference["entity"] == list_name][["Source Columns", "data_type"]]
+    
+        # Create a dictionary from the 'source' and 'destination' columns
+        column_mapping = dict(zip(mapping["Source Columns"], mapping["Destination Columns"]))
+        #data_type_mapping = dict(zip(mapping_datatype["Source Columns"], mapping_datatype["data_type"]))
+        # Rename columns in 'df' based on the mapping
+        df.rename(columns=column_mapping, inplace=True)
+        #df.rename(columns=data_type_mapping, inplace=True) 
+        
+## add the transformations of the dataframes        
+        df.replace('.', ' ', inplace=True)
+        df.replace(',', ';', inplace=True)
+        
+        # Custom function to strip HTML tags using regex
+        def strip_html_tags(cell_value):
+            if isinstance(cell_value, str):
+                clean = re.compile('<.*?>')
+                return re.sub(clean, '', cell_value)
+            else:
+                return cell_value
+        
+        # Define a function to remove non-alphanumeric characters
+        def remove_special_chars(text):
+            # Use Unicode escape sequences to handle special characters
+            return re.sub(r'[^\x00-\x7F]+', '', str(text))
+        
+        # Apply the functions to all cells in the DataFrame
+        df = df.applymap(lambda x: str(x).strip("[]").replace("'", ""))
+        df = df.applymap(remove_special_chars)
+        df = df.applymap(strip_html_tags)
+        
+        # Note: If you want to only strip leading and trailing square brackets,
+        # you can use the strip method directly without replace and lambda:
+        # df = df.applymap(lambda x: str(x).strip("[]"))
+
+    # convert date columns to autime
+        if 'Date of Inspection' in df.columns:
+            df['Date of Inspection'] = pd.to_datetime(df['Date of Inspection'], format='%Y-%m-%dT%H:%M:%SZ').dt.tz_localize('UTC')
+            au_tz = pytz.timezone('Australia/Sydney')
+            df['Date of Inspection'] = df['Date of Inspection'].dt.tz_convert(au_tz)
+            df['Date of Inspection'] = df['Date of Inspection'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        if 'Created' in df.columns:
+            df['Created'] = pd.to_datetime(df['Created'], format='%Y-%m-%dT%H:%M:%SZ').dt.tz_localize('UTC')
+            au_tz = pytz.timezone('Australia/Sydney')
+            df['Created'] = df['Created'].dt.tz_convert(au_tz)
+            df['Created'] = df['Created'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        if 'Modified' in df.columns:
+            df['Modified'] = pd.to_datetime(df['Modified'], format='%Y-%m-%dT%H:%M:%SZ').dt.tz_localize('UTC')
+            au_tz = pytz.timezone('Australia/Sydney')
+            df['Modified'] = df['Modified'].dt.tz_convert(au_tz)
+            df['Modified'] = df['Modified'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        
+
+        df['Path'] = 'testing'
+        df['ContentType'] = 'Item'
+        
+    
+#         #Custom function to apply the logic to all cells
+        def process_cell(cell_value):
+            if isinstance(cell_value, np.ndarray):
+                # Check if the cell_value is a NumPy array
+                if cell_value.size == 1:
+                    # If it has only one element, convert it to a string
+                    return str(cell_value[0])
+                else:
+                    # If it has multiple elements, convert the whole array to a string
+                    return str(cell_value)
+            elif cell_value is np.nan:  # Check if cell_value is NaN
+                return ""
+            else:
+                return str(cell_value)
+        
+        # Apply the custom function to all cells in the DataFrame
+        df = df.applymap(process_cell)
+#         string_columns = df.select_dtypes(include='object').columns
+
+
+
+     
+
+  
+# # Apply str.replace to each string column
+#         for col in string_columns:
+#             df[col] = df[col].str.replace("\n", "").str.replace("\r", "")
+    
+    
+    # Specify the file path where you want to save the CSV data
+    csv_file_path = f"{list_name}.csv"
+    
+    # Write the DataFrame to a CSV file
+    df.to_csv(csv_file_path, index=False, encoding='utf-8',header=True)
+    
+    print(f"CSV data has been saved to '{csv_file_path}'.")
+
