@@ -144,6 +144,14 @@ for list_name in list_names:
         # Rename columns in 'df' based on the mapping
         df.rename(columns=column_mapping, inplace=True)
         #df.rename(columns=data_type_mapping, inplace=True) 
+
+
+        for column in df.columns:
+        source_column = reference.loc[reference["Destination Columns"] == column]
+        if not source_column.empty:
+            is_required = source_column["isrequired"].values[0]
+            if is_required == 1:
+                df[column] = None
         
 ## add the transformations of the dataframes        
         df.replace('.', ' ', inplace=True)
