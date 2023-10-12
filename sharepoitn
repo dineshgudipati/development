@@ -146,11 +146,14 @@ for list_name in list_names:
         #df.rename(columns=data_type_mapping, inplace=True) 
 
 
+
+
         for column in df.columns:
-        source_column = reference.loc[reference["Destination Columns"] == column]
-        if not source_column.empty:
-            is_required = source_column["isrequired"].values[1]
-            if is_required == 0:
+        if column in reference["Destination Columns"].values:
+            source_column = reference.loc[reference["Destination Columns"] == column]
+            is_required = source_column["isrequired"].values[0] if not source_column.empty else None
+
+            if is_required == 1:
                 df[column] = None
         
 ## add the transformations of the dataframes        
