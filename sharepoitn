@@ -149,13 +149,15 @@ for list_name in list_names:
 
 
         for column in df.columns:
-        if column in reference["Destination Columns"].values:
-            source_column = reference.loc[reference["Destination Columns"] == column]
-            is_required = source_column["isrequired"].values[0] if not source_column.empty else None
-
-            if is_required == 1:
-                df[column] = None
+            mapping1 = reference[reference["entity"] == list_name]  
+            
+            if column in mapping1["Destination Columns"].values:
+                source_column = mapping1.loc[mapping["Destination Columns"] == column]
+                is_required = source_column["isrequired"].values[0] if not source_column.empty else None
         
+                if is_required == 1:
+                    df[column] = None
+                
 ## add the transformations of the dataframes        
         df.replace('.', ' ', inplace=True)
         df.replace(',', ';', inplace=True)
